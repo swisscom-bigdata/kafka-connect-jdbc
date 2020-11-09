@@ -18,7 +18,7 @@ pipeline {
             agent {
                 docker {
                     reuseNode true
-                    image 'io-docker.artifactory.swisscom.com/maven:3.6.0'
+                    image 'io-docker.artifactory.swisscom.com/maven:3.6.0-jdbc-connector'
                     registryUrl env.REGISTRY_URL
                     registryCredentialsId env.REGISTRY_CREDENTIALS_ID
                 }
@@ -34,7 +34,7 @@ pipeline {
             agent {
                 docker {
                     reuseNode true
-                    image 'io-docker.artifactory.swisscom.com/maven:3.6.0'
+                    image 'io-docker.artifactory.swisscom.com/maven:3.6.0-jdbc-connector'
                     registryUrl env.REGISTRY_URL
                     registryCredentialsId env.REGISTRY_CREDENTIALS_ID
                 }
