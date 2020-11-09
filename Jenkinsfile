@@ -41,7 +41,7 @@ pipeline {
             }
             steps {
                 withMaven(maven: 'Maven', mavenLocalRepo: '.repository', globalMavenSettingsConfig: "maven-settings") {
-                    sh 'export PATH=$MVN_CMD_DIR:$PATH && mvn deploy'
+                    sh 'export PATH=$MVN_CMD_DIR:$PATH && mvn deploy $PROXY_SETTINGS'
                 }
             }
         }
