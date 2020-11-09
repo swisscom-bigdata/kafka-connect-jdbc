@@ -62,9 +62,9 @@
 
     <repositories>
         <repository>
-            <id>swisscom.confluent</id>
-            <name>Swisscom Confluent remote</name>
-            <url>https://artifactory.swisscom.com/confluent-maven-remote/</url>
+            <id>confluent</id>
+            <name>Confluent</name>
+            <url>http://packages.confluent.io/maven/</url>
         </repository>
     </repositories>
 
