@@ -23,6 +23,7 @@ import com.cronutils.model.time.ExecutionTime;
 import com.cronutils.parser.CronParser;
 
 import java.time.Instant;
+import java.time.ZoneId;
 import java.time.ZoneOffset;
 import java.time.ZonedDateTime;
 import java.util.Optional;
@@ -30,6 +31,8 @@ import java.util.TimeZone;
 import org.apache.kafka.common.config.ConfigException;
 import org.apache.kafka.common.utils.SystemTime;
 import org.apache.kafka.common.utils.Time;
+import org.apache.kafka.connect.data.Schema;
+import org.apache.kafka.connect.data.SchemaAndValue;
 import org.apache.kafka.connect.errors.ConnectException;
 import org.apache.kafka.connect.source.SourceRecord;
 import org.apache.kafka.connect.source.SourceTask;
@@ -395,15 +398,33 @@ public class JdbcSourceTask extends SourceTask {
         }
       }
 
+      // TODO implement way to skip retrying forever failing batches
+      final ZoneId zone = ZoneId.of("ECT");
+      final long batchTime = getNextUpdate(querier.getLastUpdate(), pollStartTime);
+      final String batchId = Instant.ofEpochSecond(batchTime).atZone(zone).toString();
+      final String batchStartTime = Instant.now().atZone(zone).toString();
+
       final List<SourceRecord> results = new ArrayList<>();
       try {
         log.debug("Checking for next block of results from {}", querier.toString());
         querier.maybeStartQuery(cachedConnectionProvider.getConnection());
 
+        final int batchSize = querier.resultSet.getFetchSize();
         int batchMaxRows = config.getInt(JdbcSourceTaskConfig.BATCH_MAX_ROWS_CONFIG);
         boolean hadNext = true;
         while (results.size() < batchMaxRows && (hadNext = querier.next())) {
-          results.add(querier.extractRecord());
+          int rowIndex = querier.resultSet.getRow(); // 1 for first row, 2 for second one
+          SourceRecord record = querier.extractRecord();
+          record.headers().add("sbd.batch.id", new SchemaAndValue(Schema.STRING_SCHEMA, batchId));
+          record.headers().add("sbd.batch.size", new SchemaAndValue(Schema.INT32_SCHEMA, batchSize));
+          record.headers().add("sbd.batch.index", new SchemaAndValue(Schema.INT32_SCHEMA, rowIndex));
+          ((Map<String, Object>) record.sourceOffset()).put("sbd.batch.id", batchId);
+          if (rowIndex == batchSize) {
+            final String batchEndTime = Instant.now().atZone(zone).toString();
+            record.headers().add("sbd.batch.started.at", new SchemaAndValue(Schema.STRING_SCHEMA, batchStartTime));
+            record.headers().add("sbd.batch.completed.at", new SchemaAndValue(Schema.STRING_SCHEMA, batchEndTime));
+          }
+          results.add(record);
         }
 
         if (!hadNext) {
