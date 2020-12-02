@@ -34,6 +34,8 @@ import org.apache.kafka.common.utils.Time;
 import org.apache.kafka.connect.data.Schema;
 import org.apache.kafka.connect.data.SchemaAndValue;
 import org.apache.kafka.connect.errors.ConnectException;
+import org.apache.kafka.connect.header.ConnectHeaders;
+import org.apache.kafka.connect.header.Headers;
 import org.apache.kafka.connect.source.SourceRecord;
 import org.apache.kafka.connect.source.SourceTask;
 import org.slf4j.Logger;
@@ -415,16 +417,24 @@ public class JdbcSourceTask extends SourceTask {
         while (results.size() < batchMaxRows && (hadNext = querier.next())) {
           int rowIndex = querier.resultSet.getRow(); // 1 for first row, 2 for second one
           SourceRecord record = querier.extractRecord();
-          record.headers().add("sbd.batch.id", new SchemaAndValue(Schema.STRING_SCHEMA, batchId));
-          record.headers().add("sbd.batch.size", new SchemaAndValue(Schema.INT32_SCHEMA, batchSize));
-          record.headers().add("sbd.batch.index", new SchemaAndValue(Schema.INT32_SCHEMA, rowIndex));
-          ((Map<String, Object>) record.sourceOffset()).put("sbd.batch.id", batchId);
+
+          Map<String, Object> sourceOffset = new HashMap<>(record.sourceOffset());
+          sourceOffset.put("sbd.batch.id", batchId);
+
+          Headers headers = new ConnectHeaders(record.headers());
+          headers.add("sbd.batch.id", new SchemaAndValue(Schema.STRING_SCHEMA, batchId));
+          headers.add("sbd.batch.size", new SchemaAndValue(Schema.INT32_SCHEMA, batchSize));
+          headers.add("sbd.batch.index", new SchemaAndValue(Schema.INT32_SCHEMA, rowIndex));
+
           if (rowIndex == batchSize) {
             final String batchEndTime = Instant.now().atZone(zone).toString();
-            record.headers().add("sbd.batch.started.at", new SchemaAndValue(Schema.STRING_SCHEMA, batchStartTime));
-            record.headers().add("sbd.batch.completed.at", new SchemaAndValue(Schema.STRING_SCHEMA, batchEndTime));
+            headers.add("sbd.batch.started.at", new SchemaAndValue(Schema.STRING_SCHEMA, batchStartTime));
+            headers.add("sbd.batch.completed.at", new SchemaAndValue(Schema.STRING_SCHEMA, batchEndTime));
           }
-          results.add(record);
+
+          results.add(new SourceRecord(record.sourcePartition(), sourceOffset, record.topic(),
+              record.kafkaPartition(), record.keySchema(), record.key(), record.valueSchema(),
+              record.value(), record.timestamp(), headers));
         }
 
         if (!hadNext) {
