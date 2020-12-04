@@ -28,6 +28,7 @@ import java.time.ZoneOffset;
 import java.time.ZonedDateTime;
 import java.util.Optional;
 import java.util.TimeZone;
+import io.confluent.connect.jdbc.mbean.BatchMetrics;
 import org.apache.kafka.common.config.ConfigException;
 import org.apache.kafka.common.utils.SystemTime;
 import org.apache.kafka.common.utils.Time;
@@ -74,6 +75,8 @@ public class JdbcSourceTask extends SourceTask {
   // When no results, periodically return control flow to caller to give it a chance to pause us.
   private static final int CONSECUTIVE_EMPTY_RESULTS_BEFORE_RETURN = 3;
 
+  private static final String THREAD_NAME_PREFIX = "task-thread-";
+
   private static final Logger log = LoggerFactory.getLogger(JdbcSourceTask.class);
 
   private Time time;
@@ -82,6 +85,7 @@ public class JdbcSourceTask extends SourceTask {
   private ExecutionTime cronExecutionTime;
   private CachedConnectionProvider cachedConnectionProvider;
   private PriorityQueue<TableQuerier> tableQueue = new PriorityQueue<TableQuerier>();
+  private BatchMetrics metrics;
   private final AtomicBoolean running = new AtomicBoolean(false);
 
   public JdbcSourceTask() {
@@ -105,6 +109,10 @@ public class JdbcSourceTask extends SourceTask {
     } catch (ConfigException e) {
       throw new ConnectException("Couldn't start JdbcSourceTask due to configuration error", e);
     }
+
+    // register SBD MBeans
+    String taskId = Thread.currentThread().getName().substring(THREAD_NAME_PREFIX.length());
+    metrics = new BatchMetrics(taskId);
 
     final String url = config.getString(JdbcSourceConnectorConfig.CONNECTION_URL_CONFIG);
     final int maxConnAttempts = config.getInt(JdbcSourceConnectorConfig.CONNECTION_ATTEMPTS_CONFIG);
@@ -375,6 +383,8 @@ public class JdbcSourceTask extends SourceTask {
         dialect = null;
       }
     }
+
+    metrics.close();
   }
 
   @Override
@@ -401,8 +411,12 @@ public class JdbcSourceTask extends SourceTask {
       }
 
       // TODO implement way to skip retrying forever failing batches
+      // todo: for the cron scheduling I used UTC because it's more universal and no issues with
+      //       daylight saving time
       final ZoneId zone = ZoneId.of("ECT");
       final long batchTime = getNextUpdate(querier.getLastUpdate(), pollStartTime);
+      // todo below milliseconds are missing, batchId must be unique otherwise
+      //      metrics will throw exception
       final String batchId = Instant.ofEpochSecond(batchTime).atZone(zone).toString();
       final String batchStartTime = Instant.now().atZone(zone).toString();
 
@@ -415,12 +429,12 @@ public class JdbcSourceTask extends SourceTask {
         int batchMaxRows = config.getInt(JdbcSourceTaskConfig.BATCH_MAX_ROWS_CONFIG);
         boolean hadNext = true;
         while (results.size() < batchMaxRows && (hadNext = querier.next())) {
-          int rowIndex = querier.resultSet.getRow(); // 1 for first row, 2 for second one
           SourceRecord record = querier.extractRecord();
 
           Map<String, Object> sourceOffset = new HashMap<>(record.sourceOffset());
           sourceOffset.put("sbd.batch.id", batchId);
 
+          int rowIndex = querier.resultSet.getRow(); // 1 for first row, 2 for second one
           Headers headers = new ConnectHeaders(record.headers());
           headers.add("sbd.batch.id", new SchemaAndValue(Schema.STRING_SCHEMA, batchId));
           headers.add("sbd.batch.size", new SchemaAndValue(Schema.INT32_SCHEMA, batchSize));
@@ -428,13 +442,17 @@ public class JdbcSourceTask extends SourceTask {
 
           if (rowIndex == batchSize) {
             final String batchEndTime = Instant.now().atZone(zone).toString();
-            headers.add("sbd.batch.started.at", new SchemaAndValue(Schema.STRING_SCHEMA, batchStartTime));
-            headers.add("sbd.batch.completed.at", new SchemaAndValue(Schema.STRING_SCHEMA, batchEndTime));
+            headers.add("sbd.batch.started.at",
+                new SchemaAndValue(Schema.STRING_SCHEMA, batchStartTime));
+            headers.add("sbd.batch.completed.at",
+                new SchemaAndValue(Schema.STRING_SCHEMA, batchEndTime));
           }
 
           results.add(new SourceRecord(record.sourcePartition(), sourceOffset, record.topic(),
               record.kafkaPartition(), record.keySchema(), record.key(), record.valueSchema(),
               record.value(), record.timestamp(), headers));
+
+          recordBatchMetrics(batchId, batchSize, rowIndex);
         }
 
         if (!hadNext) {
@@ -480,6 +498,11 @@ public class JdbcSourceTask extends SourceTask {
     }
     closeResources();
     return null;
+  }
+
+  private void recordBatchMetrics(String batchId, int batchSize, int rowIndex) {
+    metrics.recordSize(batchId, batchSize);
+    metrics.recordPosition(batchId, rowIndex);
   }
 
   private long getNextUpdate(long lastUpdate, long pollStartTime) {
