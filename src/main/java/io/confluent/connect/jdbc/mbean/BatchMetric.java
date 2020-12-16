@@ -49,11 +49,12 @@ public class BatchMetric implements BatchMetricMBean, Closeable {
     this.position = position;
   }
 
-  public BatchMetric(String taskId, String batchId) {
+  public BatchMetric(String taskId, String tableName, String batchId) {
     try {
       Map<String, String> keyValues = new LinkedHashMap<>();
       keyValues.put("type", "BatchMetric");
       keyValues.put("task", taskId);
+      keyValues.put("table", tableName);
       keyValues.put("batch", batchId);
 
       // note that we are not escaping/encoding the arguments, as we don't expect
@@ -70,7 +71,7 @@ public class BatchMetric implements BatchMetricMBean, Closeable {
   }
 
   @Override
-  public void close() {  // todo when call? a few minutes after batch is completed?
+  public void close() {
     try {
       mbs.unregisterMBean(name);
     } catch (InstanceNotFoundException | MBeanRegistrationException e) {

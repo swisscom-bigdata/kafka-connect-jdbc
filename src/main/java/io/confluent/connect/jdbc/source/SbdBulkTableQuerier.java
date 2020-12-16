@@ -9,6 +9,8 @@ import java.time.temporal.ChronoUnit;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.UUID;
+
+import org.apache.kafka.common.utils.Time;
 import org.apache.kafka.connect.data.Schema;
 import org.apache.kafka.connect.data.SchemaAndValue;
 import org.apache.kafka.connect.header.ConnectHeaders;
@@ -66,6 +68,7 @@ public class SbdBulkTableQuerier extends BulkTableQuerier {
   private String currentBatchId;
   private Instant currentBatchTime;
   private Instant currentBatchStartTime;
+  private Time time;
 
   public SbdBulkTableQuerier(
       DatabaseDialect dialect,
@@ -73,32 +76,30 @@ public class SbdBulkTableQuerier extends BulkTableQuerier {
       String name,
       String topicPrefix,
       String suffix,
-      Map<String, Object> offset
+      Map<String, Object> offset,
+      Time time
   ) {
     super(dialect, mode, name, topicPrefix, suffix);
 
     // register SBD MBeans
     String taskId = Thread.currentThread().getName().substring(THREAD_NAME_PREFIX.length());
-    metrics = new BatchMetrics(taskId); // TODO instead of task id, check if we can use name?
+    metrics = new BatchMetrics(taskId, name);
+    this.time = time;
 
     currentBatchId = null;
     currentBatchTime = null;
     if (offset.containsKey(HEADER_BATCH_ID)) {
       String batchId = (String) offset.get(HEADER_BATCH_ID);
       boolean batchCompleted = (boolean) offset.get(HEADER_BATCH_COMPLETED);
-      Instant batchStartTime = Instant.parse((String) offset.get(HEADER_BATCH_TIME));
+      Instant batchTime = Instant.parse((String) offset.get(HEADER_BATCH_TIME));
 
       if (batchCompleted) {
-        lastUpdate = batchStartTime.toEpochMilli();
-      }
-
-      // if the batch is not completed we assume all the previous ones are completed or aborted
-      // so we will only retry the current one if needed
-      // we only retry failing/un-complete batches during 3 hours
-      // TODO do not retry more than the next planed batch. For this we need time of next execution
-      else if (batchStartTime.plus(3, ChronoUnit.HOURS).isBefore(Instant.now())) {
+        lastUpdate = batchTime.toEpochMilli();
+      } else {
+        // if the batch is not completed we assume all the previous ones are completed or aborted
+        // so we will only retry the current one if needed
         currentBatchId = batchId;
-        currentBatchTime = batchStartTime;
+        currentBatchTime = batchTime;
       }
     }
 
@@ -123,10 +124,17 @@ public class SbdBulkTableQuerier extends BulkTableQuerier {
     final int rowIndex = resultSet.getRow(); // 1 for first row, 2 for second one
     final boolean isLastRecord = rowIndex == batchSize;
 
+    // we retry failing batches during 3h but not if we are after the next scheduled execution time
+    if (rowIndex == 1
+        && Instant.ofEpochMilli(time.milliseconds()).minus(3, ChronoUnit.HOURS).isAfter(Instant.ofEpochMilli(lastUpdate))
+        && Instant.ofEpochMilli(time.milliseconds()).isBefore(Instant.ofEpochMilli(nextExecutionTime))) {
+      currentBatchId = null;
+    }
+
     // new batch
     if (currentBatchId == null) {
       currentBatchId = UUID.randomUUID().toString();
-      currentBatchTime = getNextUpdate(querier.getLastUpdate(), pollStartTime); // TODO
+      currentBatchTime = Instant.ofEpochMilli(currentExecutionTime);
       currentBatchStartTime = currentBatchTime;
     }
 
@@ -163,10 +171,6 @@ public class SbdBulkTableQuerier extends BulkTableQuerier {
   @Override
   public void reset(long now) {
     super.reset(now); // set lastUpdate = now
-
-    if (currentBatchTime != null) {
-      lastUpdate = currentBatchTime.toEpochMilli();
-    }
 
     currentBatchId = null;
     currentBatchTime = null;

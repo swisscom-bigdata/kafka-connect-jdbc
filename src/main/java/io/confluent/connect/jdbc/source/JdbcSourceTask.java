@@ -22,6 +22,11 @@ import com.cronutils.model.definition.CronDefinitionBuilder;
 import com.cronutils.model.time.ExecutionTime;
 
 import com.cronutils.parser.CronParser;
+
+import java.time.Instant;
+import java.time.ZoneOffset;
+import java.time.ZonedDateTime;
+import java.util.Optional;
 import java.util.TimeZone;
 import org.apache.kafka.common.config.ConfigException;
 import org.apache.kafka.common.utils.SystemTime;
@@ -228,6 +233,8 @@ public class JdbcSourceTask extends SourceTask {
 
       if (mode.equals(JdbcSourceTaskConfig.MODE_BULK)) {
         if (null != cronExecutionTime) {
+          Optional<ZonedDateTime> nextExecution = cronExecutionTime.nextExecution(
+              ZonedDateTime.ofInstant(Instant.ofEpochMilli(time.milliseconds()), ZoneOffset.UTC));
           tableQueue.add(
               new SbdBulkTableQuerier(
                   dialect,
@@ -235,7 +242,8 @@ public class JdbcSourceTask extends SourceTask {
                   tableOrQuery,
                   topicPrefix,
                   suffix,
-                  offset
+                  offset,
+                  time
               )
           );
         } else {
@@ -394,7 +402,9 @@ public class JdbcSourceTask extends SourceTask {
 
       if (!querier.querying()) {
         // If not in the middle of an update, wait for next update time
-        final long nextUpdate = querier.getNextUpdate(config.getLong(JdbcSourceTaskConfig.POLL_INTERVAL_MS_CONFIG));
+        final long nextUpdate = getNextUpdate(querier.getLastUpdate(), pollStartTime);
+        final long secondNextUpdate = getNextUpdate(nextUpdate, pollStartTime);
+        querier.setNextExecutions(nextUpdate, secondNextUpdate);
         final long now = time.milliseconds();
         final long sleepMs = Math.min(nextUpdate - now, 100);
 
@@ -459,6 +469,32 @@ public class JdbcSourceTask extends SourceTask {
     }
     closeResources();
     return null;
+  }
+
+  private long getNextUpdate(long lastUpdate, long pollStartTime) {
+    String pollIntervalMode = config.getString(JdbcSourceTaskConfig.POLL_INTERVAL_MODE_CONFIG);
+    switch (pollIntervalMode) {
+      case JdbcSourceTaskConfig.POLL_INTERVAL_MODE_FIXED:
+        return lastUpdate + config.getInt(JdbcSourceTaskConfig.POLL_INTERVAL_MS_CONFIG);
+      case JdbcSourceTaskConfig.POLL_INTERVAL_MODE_CRON:
+        if (lastUpdate == 0) {
+          // first execution
+          lastUpdate = pollStartTime;
+        }
+        Optional<ZonedDateTime> nextExecution = cronExecutionTime.nextExecution(
+            ZonedDateTime.ofInstant(Instant.ofEpochMilli(lastUpdate), ZoneOffset.UTC));
+        if (nextExecution.isPresent()) {
+          return Instant.from(nextExecution.get()).toEpochMilli();
+        } else {
+          log.trace("Cron expression provided does not define a next execution.");
+          return lastUpdate + 100L;
+        }
+      default:
+        throw new ConnectException("Unexpected value for configuration "
+            + JdbcSourceTaskConfig.POLL_INTERVAL_MODE_CONFIG
+            + ": "
+            + pollIntervalMode);
+    }
   }
 
   private void resetAndRequeueHead(TableQuerier expectedHead) {
