@@ -77,6 +77,10 @@ abstract class TableQuerier implements Comparable<TableQuerier> {
     return lastUpdate;
   }
 
+  public long getNextUpdate(long pollIntervalMs) {
+    return lastUpdate + pollIntervalMs;
+  }
+
   public PreparedStatement getOrCreatePreparedStatement(Connection db) throws SQLException {
     if (stmt != null) {
       return stmt;

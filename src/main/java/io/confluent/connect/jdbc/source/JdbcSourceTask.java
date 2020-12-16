@@ -20,23 +20,13 @@ import com.cronutils.model.CronType;
 import com.cronutils.model.definition.CronDefinition;
 import com.cronutils.model.definition.CronDefinitionBuilder;
 import com.cronutils.model.time.ExecutionTime;
-import com.cronutils.parser.CronParser;
 
-import java.time.Instant;
-import java.time.ZoneId;
-import java.time.ZoneOffset;
-import java.time.ZonedDateTime;
-import java.util.Optional;
+import com.cronutils.parser.CronParser;
 import java.util.TimeZone;
-import io.confluent.connect.jdbc.mbean.BatchMetrics;
 import org.apache.kafka.common.config.ConfigException;
 import org.apache.kafka.common.utils.SystemTime;
 import org.apache.kafka.common.utils.Time;
-import org.apache.kafka.connect.data.Schema;
-import org.apache.kafka.connect.data.SchemaAndValue;
 import org.apache.kafka.connect.errors.ConnectException;
-import org.apache.kafka.connect.header.ConnectHeaders;
-import org.apache.kafka.connect.header.Headers;
 import org.apache.kafka.connect.source.SourceRecord;
 import org.apache.kafka.connect.source.SourceTask;
 import org.slf4j.Logger;
@@ -75,8 +65,6 @@ public class JdbcSourceTask extends SourceTask {
   // When no results, periodically return control flow to caller to give it a chance to pause us.
   private static final int CONSECUTIVE_EMPTY_RESULTS_BEFORE_RETURN = 3;
 
-  private static final String THREAD_NAME_PREFIX = "task-thread-";
-
   private static final Logger log = LoggerFactory.getLogger(JdbcSourceTask.class);
 
   private Time time;
@@ -85,7 +73,7 @@ public class JdbcSourceTask extends SourceTask {
   private ExecutionTime cronExecutionTime;
   private CachedConnectionProvider cachedConnectionProvider;
   private PriorityQueue<TableQuerier> tableQueue = new PriorityQueue<TableQuerier>();
-  private BatchMetrics metrics;
+
   private final AtomicBoolean running = new AtomicBoolean(false);
 
   public JdbcSourceTask() {
@@ -109,10 +97,6 @@ public class JdbcSourceTask extends SourceTask {
     } catch (ConfigException e) {
       throw new ConnectException("Couldn't start JdbcSourceTask due to configuration error", e);
     }
-
-    // register SBD MBeans
-    String taskId = Thread.currentThread().getName().substring(THREAD_NAME_PREFIX.length());
-    metrics = new BatchMetrics(taskId);
 
     final String url = config.getString(JdbcSourceConnectorConfig.CONNECTION_URL_CONFIG);
     final int maxConnAttempts = config.getInt(JdbcSourceConnectorConfig.CONNECTION_ATTEMPTS_CONFIG);
@@ -243,15 +227,28 @@ public class JdbcSourceTask extends SourceTask {
       String topicPrefix = config.getString(JdbcSourceTaskConfig.TOPIC_PREFIX_CONFIG);
 
       if (mode.equals(JdbcSourceTaskConfig.MODE_BULK)) {
-        tableQueue.add(
-            new BulkTableQuerier(
-                dialect,
-                queryMode,
-                tableOrQuery,
-                topicPrefix,
-                suffix
-            )
-        );
+        if (null != cronExecutionTime) {
+          tableQueue.add(
+              new SbdBulkTableQuerier(
+                  dialect,
+                  queryMode,
+                  tableOrQuery,
+                  topicPrefix,
+                  suffix,
+                  offset
+              )
+          );
+        } else {
+          tableQueue.add(
+              new BulkTableQuerier(
+                  dialect,
+                  queryMode,
+                  tableOrQuery,
+                  topicPrefix,
+                  suffix
+              )
+          );
+        }
       } else if (mode.equals(JdbcSourceTaskConfig.MODE_INCREMENTING)) {
         tableQueue.add(
             new TimestampIncrementingTableQuerier(
@@ -383,8 +380,6 @@ public class JdbcSourceTask extends SourceTask {
         dialect = null;
       }
     }
-
-    metrics.close();
   }
 
   @Override
@@ -399,7 +394,7 @@ public class JdbcSourceTask extends SourceTask {
 
       if (!querier.querying()) {
         // If not in the middle of an update, wait for next update time
-        final long nextUpdate = getNextUpdate(querier.getLastUpdate(), pollStartTime);
+        final long nextUpdate = querier.getNextUpdate(config.getLong(JdbcSourceTaskConfig.POLL_INTERVAL_MS_CONFIG));
         final long now = time.milliseconds();
         final long sleepMs = Math.min(nextUpdate - now, 100);
 
@@ -410,49 +405,15 @@ public class JdbcSourceTask extends SourceTask {
         }
       }
 
-      // TODO implement way to skip retrying forever failing batches
-      // todo: for the cron scheduling I used UTC because it's more universal and no issues with
-      //       daylight saving time
-      final ZoneId zone = ZoneId.of("ECT");
-      final long batchTime = getNextUpdate(querier.getLastUpdate(), pollStartTime);
-      // todo below milliseconds are missing, batchId must be unique otherwise
-      //      metrics will throw exception
-      final String batchId = Instant.ofEpochSecond(batchTime).atZone(zone).toString();
-      final String batchStartTime = Instant.now().atZone(zone).toString();
-
       final List<SourceRecord> results = new ArrayList<>();
       try {
         log.debug("Checking for next block of results from {}", querier.toString());
         querier.maybeStartQuery(cachedConnectionProvider.getConnection());
 
-        final int batchSize = querier.resultSet.getFetchSize();
         int batchMaxRows = config.getInt(JdbcSourceTaskConfig.BATCH_MAX_ROWS_CONFIG);
         boolean hadNext = true;
         while (results.size() < batchMaxRows && (hadNext = querier.next())) {
-          SourceRecord record = querier.extractRecord();
-
-          Map<String, Object> sourceOffset = new HashMap<>(record.sourceOffset());
-          sourceOffset.put("sbd.batch.id", batchId);
-
-          int rowIndex = querier.resultSet.getRow(); // 1 for first row, 2 for second one
-          Headers headers = new ConnectHeaders(record.headers());
-          headers.add("sbd.batch.id", new SchemaAndValue(Schema.STRING_SCHEMA, batchId));
-          headers.add("sbd.batch.size", new SchemaAndValue(Schema.INT32_SCHEMA, batchSize));
-          headers.add("sbd.batch.index", new SchemaAndValue(Schema.INT32_SCHEMA, rowIndex));
-
-          if (rowIndex == batchSize) {
-            final String batchEndTime = Instant.now().atZone(zone).toString();
-            headers.add("sbd.batch.started.at",
-                new SchemaAndValue(Schema.STRING_SCHEMA, batchStartTime));
-            headers.add("sbd.batch.completed.at",
-                new SchemaAndValue(Schema.STRING_SCHEMA, batchEndTime));
-          }
-
-          results.add(new SourceRecord(record.sourcePartition(), sourceOffset, record.topic(),
-              record.kafkaPartition(), record.keySchema(), record.key(), record.valueSchema(),
-              record.value(), record.timestamp(), headers));
-
-          recordBatchMetrics(batchId, batchSize, rowIndex);
+          results.add(querier.extractRecord());
         }
 
         if (!hadNext) {
@@ -498,37 +459,6 @@ public class JdbcSourceTask extends SourceTask {
     }
     closeResources();
     return null;
-  }
-
-  private void recordBatchMetrics(String batchId, int batchSize, int rowIndex) {
-    metrics.recordSize(batchId, batchSize);
-    metrics.recordPosition(batchId, rowIndex);
-  }
-
-  private long getNextUpdate(long lastUpdate, long pollStartTime) {
-    String pollIntervalMode = config.getString(JdbcSourceTaskConfig.POLL_INTERVAL_MODE_CONFIG);
-    switch (pollIntervalMode) {
-      case JdbcSourceTaskConfig.POLL_INTERVAL_MODE_FIXED:
-        return lastUpdate + config.getInt(JdbcSourceTaskConfig.POLL_INTERVAL_MS_CONFIG);
-      case JdbcSourceTaskConfig.POLL_INTERVAL_MODE_CRON:
-        if (lastUpdate == 0) {
-          // first execution
-          lastUpdate = pollStartTime;
-        }
-        Optional<ZonedDateTime> nextExecution = cronExecutionTime.nextExecution(
-            ZonedDateTime.ofInstant(Instant.ofEpochMilli(lastUpdate), ZoneOffset.UTC));
-        if (nextExecution.isPresent()) {
-          return Instant.from(nextExecution.get()).toEpochMilli();
-        } else {
-          log.trace("Cron expression provided does not define a next execution.");
-          return lastUpdate + 100L;
-        }
-      default:
-        throw new ConnectException("Unexpected value for configuration "
-            + JdbcSourceTaskConfig.POLL_INTERVAL_MODE_CONFIG
-            + ": "
-            + pollIntervalMode);
-    }
   }
 
   private void resetAndRequeueHead(TableQuerier expectedHead) {
