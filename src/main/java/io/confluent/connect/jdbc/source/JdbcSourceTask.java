@@ -233,8 +233,6 @@ public class JdbcSourceTask extends SourceTask {
 
       if (mode.equals(JdbcSourceTaskConfig.MODE_BULK)) {
         if (null != cronExecutionTime) {
-          Optional<ZonedDateTime> nextExecution = cronExecutionTime.nextExecution(
-              ZonedDateTime.ofInstant(Instant.ofEpochMilli(time.milliseconds()), ZoneOffset.UTC));
           tableQueue.add(
               new SbdBulkTableQuerier(
                   dialect,

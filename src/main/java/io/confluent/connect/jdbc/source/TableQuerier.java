@@ -79,9 +79,9 @@ abstract class TableQuerier implements Comparable<TableQuerier> {
     return lastUpdate;
   }
 
-  public void setNextExecutions(long nextExecution, long secondNextExecution){
-      this.currentExecutionTime = nextExecution;
-      this.nextExecutionTime = secondNextExecution;
+  public void setNextExecutions(long nextExecution, long secondNextExecution) {
+    this.currentExecutionTime = nextExecution;
+    this.nextExecutionTime = secondNextExecution;
   }
 
   public PreparedStatement getOrCreatePreparedStatement(Connection db) throws SQLException {

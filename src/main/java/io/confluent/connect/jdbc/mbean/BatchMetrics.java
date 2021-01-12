@@ -9,10 +9,11 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 
 public class BatchMetrics implements Closeable {
+
   private final String taskId;
   private final String tableName;
 
-  private Map<String, BatchMetric> batchMetrics = new LinkedHashMap<String, BatchMetric>(){
+  private final Map<String, BatchMetric> batchMetrics = new LinkedHashMap<String, BatchMetric>() {
     @Override
     protected boolean removeEldestEntry(Map.Entry<String, BatchMetric> eldest) {
       if (size() > 5) {
@@ -48,20 +49,4 @@ public class BatchMetrics implements Closeable {
   public void close() {
     batchMetrics.values().forEach(BatchMetric::close);
   }
-
-  // only used for development, todo delete
-  public static void main(String[] args) throws InterruptedException {
-    BatchMetrics met = new BatchMetrics("abc-blah-blah-1", "table");
-    met.recordSize("A", 100);
-    met.recordPosition("A", 50);
-    met.recordSize("B", 200);
-
-    for (int i = 0; i < 200000; i++) {
-      met.recordPosition("B", i);
-      System.out.println(i);
-      Thread.sleep(5_000L);
-    }
-    met.close();
-  }
-
 }

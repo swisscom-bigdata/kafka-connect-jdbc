@@ -347,6 +347,22 @@ public class GenericDatabaseDialect implements DatabaseDialect {
     return stmt;
   }
 
+  @Override
+  public PreparedStatement createPreparedStatement(
+      Connection db,
+      String query,
+      int resultSetType
+  ) throws SQLException {
+    log.trace("Creating a PreparedStatement '{}' with type={}", query, resultSetType);
+    PreparedStatement stmt = db.prepareStatement(
+        query,
+        resultSetType,
+        ResultSet.CONCUR_READ_ONLY
+    );
+    initializePreparedStatement(stmt);
+    return stmt;
+  }
+
   /**
    * Perform any operations on a {@link PreparedStatement} before it is used. This is called from
    * the {@link #createPreparedStatement(Connection, String)} method after the statement is

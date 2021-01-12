@@ -1,7 +1,14 @@
+/*
+ * Copyright 2021 Confluent Inc.
+ * Copyright 2021 Swisscom (Switzerland) Ltd
+ */
+
 package io.confluent.connect.jdbc.source;
 
 import io.confluent.connect.jdbc.dialect.DatabaseDialect;
 import io.confluent.connect.jdbc.mbean.BatchMetrics;
+import io.confluent.connect.jdbc.util.ExpressionBuilder;
+import java.sql.Connection;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.time.Instant;
@@ -13,6 +20,7 @@ import java.util.UUID;
 import org.apache.kafka.common.utils.Time;
 import org.apache.kafka.connect.data.Schema;
 import org.apache.kafka.connect.data.SchemaAndValue;
+import org.apache.kafka.connect.errors.ConnectException;
 import org.apache.kafka.connect.header.ConnectHeaders;
 import org.apache.kafka.connect.header.Headers;
 import org.apache.kafka.connect.source.SourceRecord;
@@ -69,26 +77,30 @@ public class SbdBulkTableQuerier extends BulkTableQuerier {
   private Instant currentBatchTime;
   private Instant currentBatchStartTime;
   private Time time;
+  private int batchSize;
 
   public SbdBulkTableQuerier(
       DatabaseDialect dialect,
       QueryMode mode,
-      String name,
+      String nameOrQuery,
       String topicPrefix,
       String suffix,
       Map<String, Object> offset,
       Time time
   ) {
-    super(dialect, mode, name, topicPrefix, suffix);
+    super(dialect, mode, nameOrQuery, topicPrefix, suffix);
 
     // register SBD MBeans
-    String taskId = Thread.currentThread().getName().substring(THREAD_NAME_PREFIX.length());
-    metrics = new BatchMetrics(taskId, name);
+    String taskId = "undefined";
+    if (Thread.currentThread().getName().startsWith(THREAD_NAME_PREFIX)) {
+      taskId = Thread.currentThread().getName().substring(THREAD_NAME_PREFIX.length());
+    }
+    metrics = new BatchMetrics(taskId, tableId != null ? tableId.tableName() : "query");
     this.time = time;
 
     currentBatchId = null;
     currentBatchTime = null;
-    if (offset.containsKey(HEADER_BATCH_ID)) {
+    if (offset != null && offset.containsKey(HEADER_BATCH_ID)) {
       String batchId = (String) offset.get(HEADER_BATCH_ID);
       boolean batchCompleted = (boolean) offset.get(HEADER_BATCH_COMPLETED);
       Instant batchTime = Instant.parse((String) offset.get(HEADER_BATCH_TIME));
@@ -117,18 +129,46 @@ public class SbdBulkTableQuerier extends BulkTableQuerier {
   }
 
   @Override
+  protected void createPreparedStatement(Connection db) throws SQLException {
+    ExpressionBuilder builder = dialect.expressionBuilder();
+    switch (mode) {
+      case TABLE:
+        builder.append("SELECT * FROM ").append(tableId);
+
+        break;
+      case QUERY:
+        builder.append(query);
+
+        break;
+      default:
+        throw new ConnectException("Unknown mode: " + mode);
+    }
+
+    addSuffixIfPresent(builder);
+
+    String queryStr = builder.toString();
+
+    recordQuery(queryStr);
+    log.debug("{} prepared SQL query: {}", this, queryStr);
+    stmt = dialect.createPreparedStatement(db, queryStr, ResultSet.TYPE_SCROLL_INSENSITIVE);
+  }
+
+  @Override
   public SourceRecord extractRecord() throws SQLException {
     SourceRecord sr = super.extractRecord();
 
-    final int batchSize = resultSet.getFetchSize();
     final int rowIndex = resultSet.getRow(); // 1 for first row, 2 for second one
-    final boolean isLastRecord = rowIndex == batchSize;
+    final boolean isLastRecord = resultSet.isLast();
 
     // we retry failing batches during 3h but not if we are after the next scheduled execution time
-    if (rowIndex == 1
-        && Instant.ofEpochMilli(time.milliseconds()).minus(3, ChronoUnit.HOURS).isAfter(Instant.ofEpochMilli(lastUpdate))
-        && Instant.ofEpochMilli(time.milliseconds()).isBefore(Instant.ofEpochMilli(nextExecutionTime))) {
-      currentBatchId = null;
+    if (resultSet.isFirst()) {
+      Instant now = Instant.ofEpochMilli(time.milliseconds());
+      if (
+          now.minus(3, ChronoUnit.HOURS).isAfter(Instant.ofEpochMilli(lastUpdate))
+          && now.isBefore(Instant.ofEpochMilli(nextExecutionTime))
+      ) {
+        currentBatchId = null;
+      }
     }
 
     // new batch
@@ -136,29 +176,55 @@ public class SbdBulkTableQuerier extends BulkTableQuerier {
       currentBatchId = UUID.randomUUID().toString();
       currentBatchTime = Instant.ofEpochMilli(currentExecutionTime);
       currentBatchStartTime = currentBatchTime;
-    }
 
-    // batch already defined, here it's a new attempt
-    else if (currentBatchStartTime == null) {
-      currentBatchStartTime = Instant.now();
+      // determine the size of the batch
+      assert resultSet.isFirst();
+      resultSet.last();
+      batchSize = resultSet.getRow();
+      resultSet.first();
+    } else if (currentBatchStartTime == null) {
+      // batch already defined, here it's a new attempt
+      currentBatchStartTime = Instant.ofEpochMilli(time.milliseconds());
     }
 
     Headers headers = new ConnectHeaders(sr.headers());
-    headers.add(HEADER_BATCH_ID, new SchemaAndValue(Schema.STRING_SCHEMA, currentBatchId));
-    headers.add(HEADER_BATCH_TIME, new SchemaAndValue(Schema.STRING_SCHEMA, currentBatchTime));
-    headers.add(HEADER_BATCH_SIZE, new SchemaAndValue(Schema.INT32_SCHEMA, batchSize));
-    headers.add(HEADER_BATCH_INDEX, new SchemaAndValue(Schema.INT32_SCHEMA, rowIndex));
-    headers.add(HEADER_BATCH_STARTED_AT, new SchemaAndValue(Schema.STRING_SCHEMA, currentBatchStartTime));
-    headers.add(HEADER_BATCH_COMPLETED, new SchemaAndValue(Schema.BOOLEAN_SCHEMA, isLastRecord));
+    headers.add(
+        HEADER_BATCH_ID,
+        new SchemaAndValue(Schema.STRING_SCHEMA, currentBatchId)
+    );
+    headers.add(
+        HEADER_BATCH_TIME,
+        new SchemaAndValue(Schema.STRING_SCHEMA, currentBatchTime.toString())
+    );
+    headers.add(
+        HEADER_BATCH_SIZE,
+        new SchemaAndValue(Schema.INT32_SCHEMA, batchSize)
+    );
+    headers.add(
+        HEADER_BATCH_INDEX,
+        new SchemaAndValue(Schema.INT32_SCHEMA, rowIndex)
+    );
+    headers.add(
+        HEADER_BATCH_STARTED_AT,
+        new SchemaAndValue(Schema.STRING_SCHEMA, currentBatchStartTime.toString())
+    );
+    headers.add(
+        HEADER_BATCH_COMPLETED,
+        new SchemaAndValue(Schema.BOOLEAN_SCHEMA, isLastRecord)
+    );
 
     if (rowIndex == batchSize) {
-      final Instant batchEndTime = Instant.now();
-      headers.add(HEADER_BATCH_COMPLETED_AT, new SchemaAndValue(Schema.STRING_SCHEMA, batchEndTime));
+      final Instant batchEndTime = Instant.ofEpochMilli(time.milliseconds());
+      headers.add(
+          HEADER_BATCH_COMPLETED_AT,
+          new SchemaAndValue(Schema.STRING_SCHEMA, batchEndTime.toString())
+      );
     }
 
-    Map<String, Object> sourceOffset = new HashMap<>(sr.sourceOffset());
+    Map<String, Object> sourceOffset = sr.sourceOffset() == null
+        ? new HashMap<>() : new HashMap<>(sr.sourceOffset());
     sourceOffset.put(HEADER_BATCH_ID, currentBatchId);
-    sourceOffset.put(HEADER_BATCH_TIME, currentBatchTime);
+    sourceOffset.put(HEADER_BATCH_TIME, currentBatchTime.toString());
     sourceOffset.put(HEADER_BATCH_COMPLETED, isLastRecord);
 
     recordBatchMetrics(currentBatchId, batchSize, rowIndex);
