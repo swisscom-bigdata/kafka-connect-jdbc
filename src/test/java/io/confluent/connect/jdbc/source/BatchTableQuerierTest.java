@@ -21,7 +21,7 @@ import java.util.List;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotEquals;
 
-public class SbdBulkTableQuerierTest extends JdbcSourceTaskTestBase {
+public class BatchTableQuerierTest extends JdbcSourceTaskTestBase {
 
   @Before
   public void setup() throws Exception {
@@ -60,20 +60,21 @@ public class SbdBulkTableQuerierTest extends JdbcSourceTaskTestBase {
     // Polling record id=a
     List<SourceRecord> records = task.poll();
     assertEquals(1, records.size());
-    String batchId = (String) records.get(0).sourceOffset().get(SbdBulkTableQuerier.HEADER_BATCH_ID);
+    String batchId = (String) records.get(0).sourceOffset().get(
+        BatchTableQuerier.HEADER_BATCH_ID);
 
     Map<String, String> sourcePartition = new HashMap<String, String>();
     sourcePartition.put("table", "test");
 
     Map<String, Object> sourceOffset12 = new HashMap<String, Object>();
-    sourceOffset12.put("sbd.batch.id", batchId);
-    sourceOffset12.put("sbd.batch.time", poll1Time.toString());
-    sourceOffset12.put("sbd.batch.completed", false);
+    sourceOffset12.put("batch.id", batchId);
+    sourceOffset12.put("batch.time", poll1Time.toString());
+    sourceOffset12.put("batch.completed", false);
 
     Map<String, Object> sourceOffset3 = new HashMap<String, Object>();
-    sourceOffset3.put("sbd.batch.id", batchId);
-    sourceOffset3.put("sbd.batch.time", poll1Time.toString());
-    sourceOffset3.put("sbd.batch.completed", true);
+    sourceOffset3.put("batch.id", batchId);
+    sourceOffset3.put("batch.time", poll1Time.toString());
+    sourceOffset3.put("batch.completed", true);
 
     SchemaBuilder sb = new SchemaBuilder(Type.STRUCT);
     sb.name("test");
@@ -88,12 +89,12 @@ public class SbdBulkTableQuerierTest extends JdbcSourceTaskTestBase {
     value3.put("id", "c");
 
     Headers headers1 = new ConnectHeaders();
-    headers1.add(SbdBulkTableQuerier.HEADER_BATCH_ID, new SchemaAndValue(Schema.STRING_SCHEMA, batchId));
-    headers1.add(SbdBulkTableQuerier.HEADER_BATCH_TIME, new SchemaAndValue(Schema.STRING_SCHEMA, poll1Time.toString()));
-    headers1.add(SbdBulkTableQuerier.HEADER_BATCH_SIZE, new SchemaAndValue(Schema.INT32_SCHEMA, 3));
-    headers1.add(SbdBulkTableQuerier.HEADER_BATCH_INDEX, new SchemaAndValue(Schema.INT32_SCHEMA, 1));
-    headers1.add(SbdBulkTableQuerier.HEADER_BATCH_STARTED_AT, new SchemaAndValue(Schema.STRING_SCHEMA, poll1Time.toString()));
-    headers1.add(SbdBulkTableQuerier.HEADER_BATCH_COMPLETED, new SchemaAndValue(Schema.BOOLEAN_SCHEMA, false));
+    headers1.add(BatchTableQuerier.HEADER_BATCH_ID, new SchemaAndValue(Schema.STRING_SCHEMA, batchId));
+    headers1.add(BatchTableQuerier.HEADER_BATCH_TIME, new SchemaAndValue(Schema.STRING_SCHEMA, poll1Time.toString()));
+    headers1.add(BatchTableQuerier.HEADER_BATCH_SIZE, new SchemaAndValue(Schema.INT32_SCHEMA, 3));
+    headers1.add(BatchTableQuerier.HEADER_BATCH_INDEX, new SchemaAndValue(Schema.INT32_SCHEMA, 1));
+    headers1.add(BatchTableQuerier.HEADER_BATCH_STARTED_AT, new SchemaAndValue(Schema.STRING_SCHEMA, poll1Time.toString()));
+    headers1.add(BatchTableQuerier.HEADER_BATCH_COMPLETED, new SchemaAndValue(Schema.BOOLEAN_SCHEMA, false));
 
     SourceRecord r1 = new SourceRecord(sourcePartition, sourceOffset12, "test-test",
         null, null, null, schema, value1, null, headers1);
@@ -103,12 +104,12 @@ public class SbdBulkTableQuerierTest extends JdbcSourceTaskTestBase {
     Instant poll2Time = poll1Time.plusSeconds(5);
 
     Headers headers2 = new ConnectHeaders();
-    headers2.add(SbdBulkTableQuerier.HEADER_BATCH_ID, new SchemaAndValue(Schema.STRING_SCHEMA, batchId));
-    headers2.add(SbdBulkTableQuerier.HEADER_BATCH_TIME, new SchemaAndValue(Schema.STRING_SCHEMA, poll1Time.toString()));
-    headers2.add(SbdBulkTableQuerier.HEADER_BATCH_SIZE, new SchemaAndValue(Schema.INT32_SCHEMA, 3));
-    headers2.add(SbdBulkTableQuerier.HEADER_BATCH_INDEX, new SchemaAndValue(Schema.INT32_SCHEMA, 2));
-    headers2.add(SbdBulkTableQuerier.HEADER_BATCH_STARTED_AT, new SchemaAndValue(Schema.STRING_SCHEMA, poll1Time.toString()));
-    headers2.add(SbdBulkTableQuerier.HEADER_BATCH_COMPLETED, new SchemaAndValue(Schema.BOOLEAN_SCHEMA, false));
+    headers2.add(BatchTableQuerier.HEADER_BATCH_ID, new SchemaAndValue(Schema.STRING_SCHEMA, batchId));
+    headers2.add(BatchTableQuerier.HEADER_BATCH_TIME, new SchemaAndValue(Schema.STRING_SCHEMA, poll1Time.toString()));
+    headers2.add(BatchTableQuerier.HEADER_BATCH_SIZE, new SchemaAndValue(Schema.INT32_SCHEMA, 3));
+    headers2.add(BatchTableQuerier.HEADER_BATCH_INDEX, new SchemaAndValue(Schema.INT32_SCHEMA, 2));
+    headers2.add(BatchTableQuerier.HEADER_BATCH_STARTED_AT, new SchemaAndValue(Schema.STRING_SCHEMA, poll1Time.toString()));
+    headers2.add(BatchTableQuerier.HEADER_BATCH_COMPLETED, new SchemaAndValue(Schema.BOOLEAN_SCHEMA, false));
 
     // Polling record id=b
     records = task.poll();
@@ -121,13 +122,13 @@ public class SbdBulkTableQuerierTest extends JdbcSourceTaskTestBase {
     Instant poll3Time = poll2Time.plusSeconds(5);
 
     Headers headers3 = new ConnectHeaders();
-    headers3.add(SbdBulkTableQuerier.HEADER_BATCH_ID, new SchemaAndValue(Schema.STRING_SCHEMA, batchId));
-    headers3.add(SbdBulkTableQuerier.HEADER_BATCH_TIME, new SchemaAndValue(Schema.STRING_SCHEMA, poll1Time.toString()));
-    headers3.add(SbdBulkTableQuerier.HEADER_BATCH_SIZE, new SchemaAndValue(Schema.INT32_SCHEMA, 3));
-    headers3.add(SbdBulkTableQuerier.HEADER_BATCH_INDEX, new SchemaAndValue(Schema.INT32_SCHEMA, 3));
-    headers3.add(SbdBulkTableQuerier.HEADER_BATCH_STARTED_AT, new SchemaAndValue(Schema.STRING_SCHEMA, poll1Time.toString()));
-    headers3.add(SbdBulkTableQuerier.HEADER_BATCH_COMPLETED, new SchemaAndValue(Schema.BOOLEAN_SCHEMA, true));
-    headers3.add(SbdBulkTableQuerier.HEADER_BATCH_COMPLETED_AT, new SchemaAndValue(Schema.STRING_SCHEMA, poll3Time.toString()));
+    headers3.add(BatchTableQuerier.HEADER_BATCH_ID, new SchemaAndValue(Schema.STRING_SCHEMA, batchId));
+    headers3.add(BatchTableQuerier.HEADER_BATCH_TIME, new SchemaAndValue(Schema.STRING_SCHEMA, poll1Time.toString()));
+    headers3.add(BatchTableQuerier.HEADER_BATCH_SIZE, new SchemaAndValue(Schema.INT32_SCHEMA, 3));
+    headers3.add(BatchTableQuerier.HEADER_BATCH_INDEX, new SchemaAndValue(Schema.INT32_SCHEMA, 3));
+    headers3.add(BatchTableQuerier.HEADER_BATCH_STARTED_AT, new SchemaAndValue(Schema.STRING_SCHEMA, poll1Time.toString()));
+    headers3.add(BatchTableQuerier.HEADER_BATCH_COMPLETED, new SchemaAndValue(Schema.BOOLEAN_SCHEMA, true));
+    headers3.add(BatchTableQuerier.HEADER_BATCH_COMPLETED_AT, new SchemaAndValue(Schema.STRING_SCHEMA, poll3Time.toString()));
 
     // Polling record id=c
     records = task.poll();
@@ -138,7 +139,9 @@ public class SbdBulkTableQuerierTest extends JdbcSourceTaskTestBase {
 
     // If we poll more, then we will pull the next batch
     records = task.poll();
-    assertNotEquals(batchId, records.get(0).headers().lastWithName(SbdBulkTableQuerier.HEADER_BATCH_ID).value());
-    assertEquals(poll1Time.plus(1, ChronoUnit.HOURS).toString(), records.get(0).headers().lastWithName(SbdBulkTableQuerier.HEADER_BATCH_TIME).value());
+    assertNotEquals(batchId, records.get(0).headers().lastWithName(
+        BatchTableQuerier.HEADER_BATCH_ID).value());
+    assertEquals(poll1Time.plus(1, ChronoUnit.HOURS).toString(), records.get(0).headers().lastWithName(
+        BatchTableQuerier.HEADER_BATCH_TIME).value());
   }
 }

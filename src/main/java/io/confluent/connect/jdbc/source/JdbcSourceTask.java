@@ -234,7 +234,7 @@ public class JdbcSourceTask extends SourceTask {
       if (mode.equals(JdbcSourceTaskConfig.MODE_BULK)) {
         if (null != cronExecutionTime) {
           tableQueue.add(
-              new SbdBulkTableQuerier(
+              new BatchTableQuerier(
                   dialect,
                   queryMode,
                   tableOrQuery,

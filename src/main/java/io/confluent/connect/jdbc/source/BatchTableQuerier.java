@@ -27,50 +27,50 @@ import org.apache.kafka.connect.source.SourceRecord;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-public class SbdBulkTableQuerier extends BulkTableQuerier {
+public class BatchTableQuerier extends BulkTableQuerier {
 
   /**
    * UUID of the batch
    */
-  public static final String HEADER_BATCH_ID = "sbd.batch.id";
+  public static final String HEADER_BATCH_ID = "batch.id";
 
   /**
    * RFC 3339 datetime associated to this batch.
    * This is the expected time for this batch.
    * If the batch is retried 3 times, then the same batch time will be used for all the attempts.
    */
-  public static final String HEADER_BATCH_TIME = "sbd.batch.time";
+  public static final String HEADER_BATCH_TIME = "batch.time";
 
   /**
    * Size of the batch, representing the number of records in the ResultSet
    */
-  public static final String HEADER_BATCH_SIZE = "sbd.batch.size";
+  public static final String HEADER_BATCH_SIZE = "batch.size";
 
   /**
    * Boolean indicating if this batch is completed or not.
    * Value is always FALSE, except for the last record where value will be TRUE.
    */
-  public static final String HEADER_BATCH_COMPLETED = "sbd.batch.completed";
+  public static final String HEADER_BATCH_COMPLETED = "batch.completed";
 
   /**
    * Index of the record in the batch.
    * First item has value=1, last item has value=HEADER_BATCH_SIZE
    */
-  public static final String HEADER_BATCH_INDEX = "sbd.batch.index";
+  public static final String HEADER_BATCH_INDEX = "batch.index";
 
   /**
    * RFC 3339 datetime when the batch started.
    * At the first attempt, HEADER_BATCH_STARTED_AT equals HEADER_BATCH_TIME
    */
-  public static final String HEADER_BATCH_STARTED_AT = "sbd.batch.started.at";
+  public static final String HEADER_BATCH_STARTED_AT = "batch.started.at";
 
   /**
    * RFC 3339 datetime when the batch completed.
    */
-  public static final String HEADER_BATCH_COMPLETED_AT = "sbd.batch.completed.at";
+  public static final String HEADER_BATCH_COMPLETED_AT = "batch.completed.at";
 
   private static final String THREAD_NAME_PREFIX = "task-thread-";
-  private static final Logger log = LoggerFactory.getLogger(SbdBulkTableQuerier.class);
+  private static final Logger log = LoggerFactory.getLogger(BatchTableQuerier.class);
 
   private final BatchMetrics metrics;
   private String currentBatchId;
@@ -79,7 +79,7 @@ public class SbdBulkTableQuerier extends BulkTableQuerier {
   private Time time;
   private int batchSize;
 
-  public SbdBulkTableQuerier(
+  public BatchTableQuerier(
       DatabaseDialect dialect,
       QueryMode mode,
       String nameOrQuery,
