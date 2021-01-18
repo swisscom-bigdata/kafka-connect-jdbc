@@ -59,7 +59,7 @@ public class BatchMetric implements BatchMetricMBean, Closeable {
     try {
       Map<String, String> keyValues = new LinkedHashMap<>();
       keyValues.put("type", "source-task-metrics");
-      keyValues.put("extension", "sbd");
+      keyValues.put("extension", "batch");
       keyValues.put("task", taskId);
       keyValues.put("table", tableName);
       keyValues.put("batch", batchId);
