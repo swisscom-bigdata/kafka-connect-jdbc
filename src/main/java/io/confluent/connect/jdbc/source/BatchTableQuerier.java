@@ -90,7 +90,7 @@ public class BatchTableQuerier extends BulkTableQuerier {
   ) {
     super(dialect, mode, nameOrQuery, topicPrefix, suffix);
 
-    // register SBD MBeans
+    // register Batch MBeans
     String taskId = "undefined";
     if (Thread.currentThread().getName().startsWith(THREAD_NAME_PREFIX)) {
       taskId = Thread.currentThread().getName().substring(THREAD_NAME_PREFIX.length());
