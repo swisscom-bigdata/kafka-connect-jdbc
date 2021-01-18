@@ -20,6 +20,7 @@ import com.cronutils.model.CronType;
 import com.cronutils.model.definition.CronDefinition;
 import com.cronutils.model.definition.CronDefinitionBuilder;
 import com.cronutils.model.time.ExecutionTime;
+
 import com.cronutils.parser.CronParser;
 
 import java.time.Instant;
@@ -77,6 +78,7 @@ public class JdbcSourceTask extends SourceTask {
   private ExecutionTime cronExecutionTime;
   private CachedConnectionProvider cachedConnectionProvider;
   private PriorityQueue<TableQuerier> tableQueue = new PriorityQueue<TableQuerier>();
+
   private final AtomicBoolean running = new AtomicBoolean(false);
 
   public JdbcSourceTask() {
@@ -230,15 +232,29 @@ public class JdbcSourceTask extends SourceTask {
       String topicPrefix = config.getString(JdbcSourceTaskConfig.TOPIC_PREFIX_CONFIG);
 
       if (mode.equals(JdbcSourceTaskConfig.MODE_BULK)) {
-        tableQueue.add(
-            new BulkTableQuerier(
-                dialect,
-                queryMode,
-                tableOrQuery,
-                topicPrefix,
-                suffix
-            )
-        );
+        if (null != cronExecutionTime) {
+          tableQueue.add(
+              new BatchTableQuerier(
+                  dialect,
+                  queryMode,
+                  tableOrQuery,
+                  topicPrefix,
+                  suffix,
+                  offset,
+                  time
+              )
+          );
+        } else {
+          tableQueue.add(
+              new BulkTableQuerier(
+                  dialect,
+                  queryMode,
+                  tableOrQuery,
+                  topicPrefix,
+                  suffix
+              )
+          );
+        }
       } else if (mode.equals(JdbcSourceTaskConfig.MODE_INCREMENTING)) {
         tableQueue.add(
             new TimestampIncrementingTableQuerier(
@@ -385,6 +401,8 @@ public class JdbcSourceTask extends SourceTask {
       if (!querier.querying()) {
         // If not in the middle of an update, wait for next update time
         final long nextUpdate = getNextUpdate(querier.getLastUpdate(), pollStartTime);
+        final long secondNextUpdate = getNextUpdate(nextUpdate, pollStartTime);
+        querier.setNextExecutions(nextUpdate, secondNextUpdate);
         final long now = time.milliseconds();
         final long sleepMs = Math.min(nextUpdate - now, 100);
 

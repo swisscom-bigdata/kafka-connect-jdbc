@@ -51,6 +51,8 @@ abstract class TableQuerier implements Comparable<TableQuerier> {
   // Mutable state
 
   protected long lastUpdate;
+  protected long currentExecutionTime;
+  protected long nextExecutionTime;
   protected Connection db;
   protected PreparedStatement stmt;
   protected ResultSet resultSet;
@@ -75,6 +77,11 @@ abstract class TableQuerier implements Comparable<TableQuerier> {
 
   public long getLastUpdate() {
     return lastUpdate;
+  }
+
+  public void setNextExecutions(long nextExecution, long secondNextExecution) {
+    this.currentExecutionTime = nextExecution;
+    this.nextExecutionTime = secondNextExecution;
   }
 
   public PreparedStatement getOrCreatePreparedStatement(Connection db) throws SQLException {

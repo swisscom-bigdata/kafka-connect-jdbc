@@ -146,6 +146,31 @@ public interface DatabaseDialect extends ConnectionProvider {
   ) throws SQLException;
 
   /**
+   * Create a new prepared statement using the specified database connection
+   * that will generate <code>ResultSet</code> objects with the given type.
+   *
+   * <p>
+   * This method is the same as the <code>createPreparedStatement</code> method
+   * above, but it allows the default result set type to be overridden.
+   * </p>
+   *
+   * @param connection the database connection; may not be null
+   * @param query      the query expression for the prepared statement; may not be null
+   * @param resultSetType one of the following <code>ResultSet</code>
+   *        constants:
+   *         <code>ResultSet.TYPE_FORWARD_ONLY</code> (default),
+   *         <code>ResultSet.TYPE_SCROLL_INSENSITIVE</code>, or
+   *         <code>ResultSet.TYPE_SCROLL_SENSITIVE</code>
+   * @return a new prepared statement; never null
+   * @throws SQLException if there is an error with the database connection
+   */
+  PreparedStatement createPreparedStatement(
+      Connection connection,
+      String query,
+      int resultSetType
+  ) throws SQLException;
+
+  /**
    * Parse the supplied simple name or fully qualified name for a table into a {@link TableId}.
    *
    * @param fqn the fully qualified string representation; may not be null
