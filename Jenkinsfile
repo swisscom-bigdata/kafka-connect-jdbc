@@ -14,7 +14,7 @@ pipeline {
 
     stages {
 
-        stage('Build jars') {
+        stage('Build and deploy jars') {
             agent {
                 docker {
                     reuseNode true
@@ -25,23 +25,7 @@ pipeline {
             }
             steps {
                 withMaven(maven: 'Maven', mavenLocalRepo: '.repository', globalMavenSettingsConfig: "maven-settings") {
-                    sh 'export PATH=$MVN_CMD_DIR:$PATH && mvn clean package -U $PROXY_SETTINGS'
-                }
-            }
-        }
-
-        stage('Deploy jars') {
-            agent {
-                docker {
-                    reuseNode true
-                    image 'io-docker.artifactory.swisscom.com/maven:3.6.0-jdbc-connector'
-                    registryUrl env.REGISTRY_URL
-                    registryCredentialsId env.REGISTRY_CREDENTIALS_ID
-                }
-            }
-            steps {
-                withMaven(maven: 'Maven', mavenLocalRepo: '.repository', globalMavenSettingsConfig: "maven-settings") {
-                    sh 'export PATH=$MVN_CMD_DIR:$PATH && mvn deploy:deploy-file -DgroupId=io.confluent -DartifactId=kafka-connect-jdbc -Dversion=$IMAGE_TAG -Dpackaging=jar -Dfile=target/kafka-connect-jdbc-$IMAGE_TAG.jar -DrepositoryId=releases -Durl=https://artifactory.swisscom.com:443/io-maven-local/ $PROXY_SETTINGS'
+                    sh 'export PATH=$MVN_CMD_DIR:$PATH && mvn clean deploy -U $PROXY_SETTINGS'
                 }
             }
         }
