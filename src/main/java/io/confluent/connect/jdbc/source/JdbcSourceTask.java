@@ -20,14 +20,14 @@ import com.cronutils.model.CronType;
 import com.cronutils.model.definition.CronDefinition;
 import com.cronutils.model.definition.CronDefinitionBuilder;
 import com.cronutils.model.time.ExecutionTime;
-
 import com.cronutils.parser.CronParser;
-
-import java.time.Instant;
-import java.time.ZoneOffset;
-import java.time.ZonedDateTime;
-import java.util.Optional;
-import java.util.TimeZone;
+import io.confluent.connect.jdbc.dialect.DatabaseDialect;
+import io.confluent.connect.jdbc.dialect.DatabaseDialects;
+import io.confluent.connect.jdbc.util.CachedConnectionProvider;
+import io.confluent.connect.jdbc.util.ColumnDefinition;
+import io.confluent.connect.jdbc.util.ColumnId;
+import io.confluent.connect.jdbc.util.TableId;
+import io.confluent.connect.jdbc.util.Version;
 import org.apache.kafka.common.config.ConfigException;
 import org.apache.kafka.common.utils.SystemTime;
 import org.apache.kafka.common.utils.Time;
@@ -39,6 +39,9 @@ import org.slf4j.LoggerFactory;
 
 import java.sql.Connection;
 import java.sql.SQLException;
+import java.time.Instant;
+import java.time.ZoneOffset;
+import java.time.ZonedDateTime;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Calendar;
@@ -48,19 +51,13 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Optional;
 import java.util.PriorityQueue;
 import java.util.Set;
+import java.util.TimeZone;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Function;
 import java.util.stream.Collectors;
-
-import io.confluent.connect.jdbc.dialect.DatabaseDialect;
-import io.confluent.connect.jdbc.dialect.DatabaseDialects;
-import io.confluent.connect.jdbc.util.CachedConnectionProvider;
-import io.confluent.connect.jdbc.util.ColumnDefinition;
-import io.confluent.connect.jdbc.util.ColumnId;
-import io.confluent.connect.jdbc.util.TableId;
-import io.confluent.connect.jdbc.util.Version;
 
 /**
  * JdbcSourceTask is a Kafka Connect SourceTask implementation that reads from JDBC databases and
@@ -76,8 +73,9 @@ public class JdbcSourceTask extends SourceTask {
   private JdbcSourceTaskConfig config;
   private DatabaseDialect dialect;
   private ExecutionTime cronExecutionTime;
+  private String pollIntervalMode;
   private CachedConnectionProvider cachedConnectionProvider;
-  private PriorityQueue<TableQuerier> tableQueue = new PriorityQueue<TableQuerier>();
+  private PriorityQueue<TableQuerier> tableQueue = new PriorityQueue<>();
 
   private final AtomicBoolean running = new AtomicBoolean(false);
 
@@ -117,9 +115,9 @@ public class JdbcSourceTask extends SourceTask {
 
     cachedConnectionProvider = connectionProvider(maxConnAttempts, retryBackoff);
 
-    final String pollIntervalMode = config.getString(
-        JdbcSourceConnectorConfig.POLL_INTERVAL_MODE_CONFIG);
-    if (JdbcSourceConnectorConfig.POLL_INTERVAL_MODE_CRON.equals(pollIntervalMode)) {
+    pollIntervalMode = config.getString(JdbcSourceConnectorConfig.POLL_INTERVAL_MODE_CONFIG);
+    if (JdbcSourceConnectorConfig.POLL_INTERVAL_MODE_CRON.equals(pollIntervalMode)
+        || JdbcSourceConnectorConfig.POLL_INTERVAL_MODE_CRON_NO_HEADERS.equals(pollIntervalMode)) {
       final String cronString = config.getString(
           JdbcSourceConnectorConfig.POLL_INTERVAL_CRON_CONFIG);
       CronDefinition cronDefinition = CronDefinitionBuilder.instanceDefinitionFor(CronType.QUARTZ);
@@ -130,8 +128,8 @@ public class JdbcSourceTask extends SourceTask {
       } catch (IllegalArgumentException e) {
         throw new ConnectException(
             "Invalid configuration: the poll interval defined in config "
-            + JdbcSourceConnectorConfig.POLL_INTERVAL_MODE_CONFIG
-            + " is invalid.", e);
+                + JdbcSourceConnectorConfig.POLL_INTERVAL_MODE_CONFIG
+                + " is invalid.", e);
       }
     }
 
@@ -139,12 +137,12 @@ public class JdbcSourceTask extends SourceTask {
     String query = config.getString(JdbcSourceTaskConfig.QUERY_CONFIG);
     if ((tables.isEmpty() && query.isEmpty()) || (!tables.isEmpty() && !query.isEmpty())) {
       throw new ConnectException("Invalid configuration: each JdbcSourceTask must have at "
-                                        + "least one table assigned to it or one query specified");
+          + "least one table assigned to it or one query specified");
     }
     TableQuerier.QueryMode queryMode = !query.isEmpty() ? TableQuerier.QueryMode.QUERY :
-                                       TableQuerier.QueryMode.TABLE;
+        TableQuerier.QueryMode.TABLE;
     List<String> tablesOrQuery = queryMode == TableQuerier.QueryMode.QUERY
-                                 ? Collections.singletonList(query) : tables;
+        ? Collections.singletonList(query) : tables;
 
     String mode = config.getString(JdbcSourceTaskConfig.MODE_CONFIG);
     //used only in table mode
@@ -167,8 +165,9 @@ public class JdbcSourceTask extends SourceTask {
           break;
         case QUERY:
           log.trace("Starting in QUERY mode");
-          partitions.add(Collections.singletonMap(JdbcSourceConnectorConstants.QUERY_NAME_KEY,
-                                                  JdbcSourceConnectorConstants.QUERY_NAME_VALUE));
+          partitions.add(Collections.singletonMap(
+              JdbcSourceConnectorConstants.QUERY_NAME_KEY,
+              JdbcSourceConnectorConstants.QUERY_NAME_VALUE));
           break;
         default:
           throw new ConnectException("Unknown query mode: " + queryMode);
@@ -232,7 +231,7 @@ public class JdbcSourceTask extends SourceTask {
       String topicPrefix = config.getString(JdbcSourceTaskConfig.TOPIC_PREFIX_CONFIG);
 
       if (mode.equals(JdbcSourceTaskConfig.MODE_BULK)) {
-        if (null != cronExecutionTime) {
+        if (JdbcSourceConnectorConfig.POLL_INTERVAL_MODE_CRON.equals(pollIntervalMode)) {
           tableQueue.add(
               new BatchTableQuerier(
                   dialect,
@@ -241,8 +240,7 @@ public class JdbcSourceTask extends SourceTask {
                   topicPrefix,
                   suffix,
                   offset,
-                  time
-              )
+                  time)
           );
         } else {
           tableQueue.add(
@@ -328,9 +326,9 @@ public class JdbcSourceTask extends SourceTask {
   }
 
   protected Map<String, Object> computeInitialOffset(
-          String tableOrQuery,
-          Map<String, Object> partitionOffset,
-          TimeZone timezone) {
+      String tableOrQuery,
+      Map<String, Object> partitionOffset,
+      TimeZone timezone) {
     if (!(partitionOffset == null)) {
       return partitionOffset;
     } else {
@@ -349,10 +347,10 @@ public class JdbcSourceTask extends SourceTask {
             throw new ConnectException("Error while getting initial timestamp from database", e);
           }
         }
-        initialPartitionOffset = new HashMap<String, Object>();
+        initialPartitionOffset = new HashMap<>();
         initialPartitionOffset.put(TimestampIncrementingOffset.TIMESTAMP_FIELD, timestampInitial);
         log.info("No offsets found for '{}', so using configured timestamp {}", tableOrQuery,
-                timestampInitial);
+            timestampInitial);
       }
       return initialPartitionOffset;
     }
@@ -389,8 +387,8 @@ public class JdbcSourceTask extends SourceTask {
   }
 
   @Override
-  public List<SourceRecord> poll() throws InterruptedException {
-    log.trace("{} Polling for new data");
+  public List<SourceRecord> poll() {
+    log.trace("Polling for new data");
 
     Map<TableQuerier, Integer> consecutiveEmptyResults = tableQueue.stream().collect(
         Collectors.toMap(Function.identity(), (q) -> 0));
@@ -475,6 +473,7 @@ public class JdbcSourceTask extends SourceTask {
       case JdbcSourceTaskConfig.POLL_INTERVAL_MODE_FIXED:
         return lastUpdate + config.getInt(JdbcSourceTaskConfig.POLL_INTERVAL_MS_CONFIG);
       case JdbcSourceTaskConfig.POLL_INTERVAL_MODE_CRON:
+      case JdbcSourceTaskConfig.POLL_INTERVAL_MODE_CRON_NO_HEADERS:
         if (lastUpdate == 0) {
           // first execution
           lastUpdate = pollStartTime;
@@ -511,7 +510,7 @@ public class JdbcSourceTask extends SourceTask {
   ) {
     try {
       Set<String> lowercaseTsColumns = new HashSet<>();
-      for (String timestampColumn: timestampColumns) {
+      for (String timestampColumn : timestampColumns) {
         lowercaseTsColumns.add(timestampColumn.toLowerCase(Locale.getDefault()));
       }
 
@@ -540,23 +539,23 @@ public class JdbcSourceTask extends SourceTask {
       // for table-based copying because custom query mode doesn't allow this to be looked up
       // without a query or parsing the query since we don't have a table name.
       if ((incrementalMode.equals(JdbcSourceConnectorConfig.MODE_INCREMENTING)
-           || incrementalMode.equals(JdbcSourceConnectorConfig.MODE_TIMESTAMP_INCREMENTING))
+               || incrementalMode.equals(JdbcSourceConnectorConfig.MODE_TIMESTAMP_INCREMENTING))
           && incrementingOptional) {
         throw new ConnectException("Cannot make incremental queries using incrementing column "
-                                   + incrementingColumn + " on " + table + " because this column "
-                                   + "is nullable.");
+            + incrementingColumn + " on " + table + " because this column "
+            + "is nullable.");
       }
       if ((incrementalMode.equals(JdbcSourceConnectorConfig.MODE_TIMESTAMP)
-           || incrementalMode.equals(JdbcSourceConnectorConfig.MODE_TIMESTAMP_INCREMENTING))
+               || incrementalMode.equals(JdbcSourceConnectorConfig.MODE_TIMESTAMP_INCREMENTING))
           && !atLeastOneTimestampNotOptional) {
         throw new ConnectException("Cannot make incremental queries using timestamp columns "
-                                   + timestampColumns + " on " + table + " because all of these "
-                                   + "columns "
-                                   + "nullable.");
+            + timestampColumns + " on " + table + " because all of these "
+            + "columns "
+            + "nullable.");
       }
     } catch (SQLException e) {
       throw new ConnectException("Failed trying to validate that columns used for offsets are NOT"
-                                 + " NULL", e);
+          + " NULL", e);
     }
   }
 }

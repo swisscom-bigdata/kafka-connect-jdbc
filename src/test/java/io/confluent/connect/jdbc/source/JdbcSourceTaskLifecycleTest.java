@@ -23,14 +23,13 @@ import org.junit.runner.RunWith;
 import org.powermock.api.easymock.PowerMock;
 import org.powermock.api.easymock.annotation.Mock;
 import org.powermock.core.classloader.annotations.PowerMockIgnore;
-import org.powermock.core.classloader.annotations.PrepareForTest;
 import org.powermock.modules.junit4.PowerMockRunner;
 
 import java.sql.Connection;
+import java.sql.SQLException;
 import java.util.List;
 import java.util.Map;
 
-import io.confluent.connect.jdbc.dialect.DatabaseDialect;
 import io.confluent.connect.jdbc.util.CachedConnectionProvider;
 
 import static org.junit.Assert.assertEquals;
@@ -114,6 +113,15 @@ public class JdbcSourceTaskLifecycleTest extends JdbcSourceTaskTestBase {
 
   @Test
   public void testPollIntervalCron() throws Exception {
+    testPollIntervalCron(JdbcSourceConnectorConfig.POLL_INTERVAL_MODE_CRON);
+  }
+
+  @Test
+  public void testPollIntervalCronNoHeaders() throws Exception {
+    testPollIntervalCron(JdbcSourceConnectorConfig.POLL_INTERVAL_MODE_CRON_NO_HEADERS);
+  }
+
+  private void testPollIntervalCron(String pollIntervalMode) throws SQLException, InterruptedException {
     // Here we just want to verify behavior of the poll method, not any loading of data, so we
     // specifically want an empty
     db.createTable(SINGLE_TABLE_NAME, "id", "INT");
@@ -122,7 +130,7 @@ public class JdbcSourceTaskLifecycleTest extends JdbcSourceTaskTestBase {
 
     long startTime = time.milliseconds();
     Map<String, String> configCronInterval = singleTableConfig();
-    configCronInterval.put(JdbcSourceConnectorConfig.POLL_INTERVAL_MODE_CONFIG, JdbcSourceConnectorConfig.POLL_INTERVAL_MODE_CRON);
+    configCronInterval.put(JdbcSourceConnectorConfig.POLL_INTERVAL_MODE_CONFIG, pollIntervalMode);
 
     // configure to poll once per second
     configCronInterval.put(JdbcSourceConnectorConfig.POLL_INTERVAL_CRON_CONFIG, "* * * ? * *");

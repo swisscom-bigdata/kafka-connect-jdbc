@@ -84,10 +84,14 @@ public class JdbcSourceConnectorConfig extends AbstractConfig {
       "Whether to poll the source DB at ``fixed`` intervals or according to a ``cron`` schedule.\n"
           + "  * Use ``fixed`` to poll the source DB set in ``poll.interval.ms``.\n"
           + "  * Use ``cron`` to poll according to the schedule defined in ``poll.interval.cron``."
+          + "  * Use ``cron-no-headers`` to poll according to the schedule defined in "
+          + "``poll.interval.cron`` with drivers that only support ResultSet with "
+          + "TYPE_FORWARD_ONLY. Headers with batch metadata cannot be added."
           + "\n";
 
   public static final String POLL_INTERVAL_MODE_FIXED = "fixed";
   public static final String POLL_INTERVAL_MODE_CRON = "cron";
+  public static final String POLL_INTERVAL_MODE_CRON_NO_HEADERS = "cron-no-headers";
 
   public static final String POLL_INTERVAL_MS_CONFIG = "poll.interval.ms";
   private static final String POLL_INTERVAL_MS_DOC = "Frequency in ms to poll for new data in "
@@ -281,7 +285,7 @@ public class JdbcSourceConnectorConfig extends AbstractConfig {
   private static final String DB_TIMEZONE_CONFIG_DISPLAY = "DB time zone";
 
   public static final String QUOTE_SQL_IDENTIFIERS_CONFIG = "quote.sql.identifiers";
-  public static final String QUOTE_SQL_IDENTIFIERS_DEFAULT = QuoteMethod.ALWAYS.name().toString();
+  public static final String QUOTE_SQL_IDENTIFIERS_DEFAULT = QuoteMethod.ALWAYS.name();
   public static final String QUOTE_SQL_IDENTIFIERS_DOC =
       "When to quote table names, column names, and other identifiers in SQL statements. "
       + "For backward compatibility, the default is ``always``.";
@@ -577,7 +581,8 @@ public class JdbcSourceConnectorConfig extends AbstractConfig {
         POLL_INTERVAL_MODE_FIXED,
         ConfigDef.ValidString.in(
             POLL_INTERVAL_MODE_FIXED,
-            POLL_INTERVAL_MODE_CRON
+            POLL_INTERVAL_MODE_CRON,
+            POLL_INTERVAL_MODE_CRON_NO_HEADERS
             ),
         Importance.MEDIUM,
         POLL_INTERVAL_MODE_DOC,
@@ -782,6 +787,7 @@ public class JdbcSourceConnectorConfig extends AbstractConfig {
         case POLL_INTERVAL_MODE_FIXED:
           return name.equals(POLL_INTERVAL_MS_CONFIG);
         case POLL_INTERVAL_MODE_CRON:
+        case POLL_INTERVAL_MODE_CRON_NO_HEADERS:
           return name.equals(POLL_INTERVAL_CRON_CONFIG);
         default:
           throw new ConfigException("Invalid mode: " + pollIntervalMode);
